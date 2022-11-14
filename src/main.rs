@@ -9,20 +9,14 @@ fn main() {
         .run();
 }
 
-const DEG_PERIOD: usize = 360;
 const RADIUS_RATIO: f32 = 2.0 / 3.0;
 const PEN_OFFSET: f32 = 1.5;
 const OUTER_RADIUS: f32 = 200.0;
 
 struct Model {
     _window: window::Id,
-    points: Vec<Vec2>,
-    wheel: Wheel,
-    inner: Circle,
-    outer: Circle,
-    delta_theta: f32,
-    theta: f32,
     clobber: f32,
+    spiro: Spiro,
     first_frame: bool,
     egui: Egui,
 }
@@ -35,50 +29,22 @@ fn init(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let initial_roll = 0.0;
-    let initial_theta = 0.0;
-
-    let (inner, outer, wheel) = init_spiro(
-        RADIUS_RATIO,
-        PEN_OFFSET,
+    let spiro = Spiro::new(
+        OUTER_RADIUS * RADIUS_RATIO,
         OUTER_RADIUS,
-        initial_roll,
-        initial_theta,
+        PEN_OFFSET,
+        (0.5).to_radians(),
     );
 
     let egui = Egui::from_window(&app.window(_window).unwrap());
 
     Model {
         _window,
-        wheel,
-        points: Vec::<Vec2>::new(),
-        inner,
-        outer,
-        delta_theta: 0.5,
-        theta: 0.0,
+        spiro,
         clobber: 0.003,
         first_frame: true,
         egui,
     }
-}
-
-fn init_spiro(
-    radius_ratio: f32,
-    pen_offset: f32,
-    outer_radius: f32,
-    initial_roll: f32,
-    initial_theta: f32,
-) -> (Circle, Circle, Wheel) {
-    let outer = Circle::new(outer_radius);
-    let inner = Circle::new((1.0 - radius_ratio) * outer_radius);
-    let wheel = Wheel::new(
-        initial_roll,
-        outer.radius - inner.radius,
-        inner.pt_at(initial_theta),
-        pen_offset,
-    );
-
-    (inner, outer, wheel)
 }
 
 fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
@@ -86,13 +52,9 @@ fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event:
 }
 
 fn update(_app: &App, _model: &mut Model, _update: Update) {
-    _model.theta = _model.theta + _model.delta_theta;
-    let distance = _model.delta_theta * _model.outer.circumference() / (DEG_PERIOD as f32);
-    let position = _model.inner.pt_at(_model.theta);
+    let spiro = &mut _model.spiro;
+    spiro.update();
 
-    _model.wheel.roll(distance, position);
-
-    _model.points.append(&mut vec![_model.wheel.pen_location()]);
     if _model.first_frame == true {
         _model.first_frame = false;
     }
@@ -103,14 +65,16 @@ fn update(_app: &App, _model: &mut Model, _update: Update) {
 
     // begin variables exposed via the ui
     let clobber = &mut _model.clobber;
-    let wheel = &mut _model.wheel;
 
     egui::Window::new("Controls").show(&ctx, |ui| {
         ui.label("fade");
         ui.add(egui::Slider::new(clobber, 0.0..=0.01));
 
         ui.label("pen offset");
-        ui.add(egui::Slider::new(&mut wheel.pen_offset, -2.0..=2.0));
+        ui.add(egui::Slider::new(&mut spiro.pen_offset, -4.0..=4.0));
+
+        ui.label("wheel radius");
+        ui.add(egui::Slider::new(&mut spiro.wheel_radius, 1.0..=spiro.outer_radius));
     });
 }
 
@@ -129,9 +93,9 @@ fn view(app: &App, model: &Model, frame: Frame) {
             .color(rgba(0.0, 0.0, 0.0, model.clobber));
     }
 
-    model.wheel.draw(&draw);
+    model.spiro.draw(&draw);
 
-    model.wheel.draw_guides(&draw);
+    model.spiro.draw_guides(&draw);
 
     draw.to_frame(app, &frame).unwrap();
     model.egui.draw_to_frame(&frame).unwrap();
@@ -221,53 +185,6 @@ impl Circle {
     }
 }
 
-struct Wheel {
-    roll_phase: f32,
-    geometry: Circle,
-    pen_offset: f32,
-}
-
-impl Wheel {
-    fn new(initial_roll_phase: f32, radius: f32, location: Vec2, pen_offset: f32) -> Wheel {
-        Wheel {
-            roll_phase: initial_roll_phase,
-            geometry: Circle::new_at(location, radius),
-            pen_offset,
-        }
-    }
-
-    fn roll(&mut self, distance: f32, end: Vec2) {
-        self.geometry.centre = end;
-        let angle_traversed = 2.0 * PI * distance / self.geometry.circumference();
-        self.roll_phase = self.roll_phase - angle_traversed;
-    }
-
-    fn pen_location(&self) -> Vec2 {
-        self.geometry.centre.lerp(
-            self.geometry.pt_at(self.roll_phase.to_degrees()),
-            self.pen_offset,
-        )
-    }
-
-    fn draw_guides(&self, draw: &Draw) {
-        self.geometry.draw(draw);
-        draw.line()
-            .stroke_weight(1.0)
-            .start_cap_round()
-            .color(rgba(0.1, 0.6, 0.8, 0.1))
-            .start(self.pen_location())
-            .end(self.geometry.centre);
-    }
-
-    fn draw(&self, draw: &Draw) {
-        draw.ellipse()
-            .xy(self.pen_location())
-            .w_h(5.0, 5.0)
-            .color(Circle::rainbow(self.roll_phase.to_degrees()));
-    }
-}
-
-#[allow(dead_code)]
 struct Spiro {
     wheel_radius: f32,
     theta: f32,
@@ -276,10 +193,19 @@ struct Spiro {
     delta_theta: f32,
 }
 
-#[allow(dead_code)]
 impl Spiro {
+    fn new(wheel_radius: f32, outer_radius: f32, pen_offset: f32, delta_theta: f32) -> Spiro {
+        Spiro {
+            wheel_radius,
+            theta: 0.0,
+            pen_offset,
+            outer_radius,
+            delta_theta,
+        }
+    }
+
     fn get_wheel_theta(&self) -> f32 {
-        self.theta * self.wheel_radius / self.outer_radius
+        -self.theta * self.outer_radius / self.wheel_radius
     }
 
     fn get_wheel_centre(&self) -> Vec2 {
@@ -297,12 +223,13 @@ impl Spiro {
             .add(self.get_wheel_centre())
     }
 
-    fn get_spoke(&self) -> (Vec2, Vec2) {
-        (self.get_wheel_centre(), self.get_spoke_end())
+    fn get_arm(&self) -> (Vec2, Vec2) {
+        (self.get_wheel_centre(), self.pen_location())
     }
 
     fn pen_location(&self) -> Vec2 {
-        self.get_wheel_centre().lerp(self.get_spoke_end(), self.pen_offset)
+        self.get_wheel_centre()
+            .lerp(self.get_spoke_end(), self.pen_offset)
     }
 
     fn update(&mut self) {
@@ -310,6 +237,31 @@ impl Spiro {
     }
 
     fn get_wheel_circle(&self) -> Circle {
-        Circle { radius: self.wheel_radius, centre: self.get_wheel_centre(), color_func: &Circle::rainbow }
+        Circle {
+            radius: self.wheel_radius,
+            centre: self.get_wheel_centre(),
+            color_func: &Circle::rainbow,
+        }
+    }
+
+    fn draw(&self, draw: &Draw) {
+        draw.ellipse()
+            .xy(self.pen_location())
+            .w_h(5.0, 5.0)
+            .color(Circle::rainbow(self.get_wheel_theta().to_degrees()));
+    }
+
+    fn draw_guides(&self, draw: &Draw) {
+        let mut wheel = self.get_wheel_circle();
+        wheel.set_color_func(&Circle::white);
+        wheel.draw(draw);
+
+        let (start, end) = self.get_arm();
+        draw.line()
+            .stroke_weight(1.0)
+            .start_cap_round()
+            .color(rgba(0.1, 0.6, 0.8, 0.1))
+            .start(start)
+            .end(end);
     }
 }
