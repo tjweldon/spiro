@@ -1,6 +1,6 @@
 use nannou::prelude::*;
 use nannou_egui::{self, egui, Egui};
-use std::ops::Add;
+use std::ops::{Add, Mul};
 
 fn main() {
     nannou::app(init)
@@ -270,9 +270,46 @@ impl Wheel {
 #[allow(dead_code)]
 struct Spiro {
     wheel_radius: f32,
-    wheel_theta: f32,
     theta: f32,
     pen_offset: f32,
     outer_radius: f32,
     delta_theta: f32,
+}
+
+#[allow(dead_code)]
+impl Spiro {
+    fn get_wheel_theta(&self) -> f32 {
+        self.theta * self.wheel_radius / self.outer_radius
+    }
+
+    fn get_wheel_centre(&self) -> Vec2 {
+        let wheel_path_radius = self.outer_radius - self.wheel_radius;
+
+        vec2(
+            wheel_path_radius * self.theta.cos(),
+            wheel_path_radius * self.theta.sin(),
+        )
+    }
+
+    fn get_spoke_end(&self) -> Vec2 {
+        vec2(self.get_wheel_theta().cos(), self.get_wheel_theta().sin())
+            .mul(self.wheel_radius)
+            .add(self.get_wheel_centre())
+    }
+
+    fn get_spoke(&self) -> (Vec2, Vec2) {
+        (self.get_wheel_centre(), self.get_spoke_end())
+    }
+
+    fn pen_location(&self) -> Vec2 {
+        self.get_wheel_centre().lerp(self.get_spoke_end(), self.pen_offset)
+    }
+
+    fn update(&mut self) {
+        self.theta = self.theta + self.delta_theta;
+    }
+
+    fn get_wheel_circle(&self) -> Circle {
+        Circle { radius: self.wheel_radius, centre: self.get_wheel_centre(), color_func: &Circle::rainbow }
+    }
 }
