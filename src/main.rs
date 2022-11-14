@@ -1,14 +1,18 @@
 use nannou::prelude::*;
+use nannou_egui::{self, egui, Egui};
 use std::ops::Add;
 
 fn main() {
-    nannou::app(model)
+    nannou::app(init)
         .update(update)
         .loop_mode(LoopMode::RefreshSync)
         .run();
 }
 
 const DEG_PERIOD: usize = 360;
+const RADIUS_RATIO: f32 = 2.0 / 3.0;
+const PEN_OFFSET: f32 = 1.5;
+const OUTER_RADIUS: f32 = 200.0;
 
 struct Model {
     _window: window::Id,
@@ -20,18 +24,30 @@ struct Model {
     theta: f32,
     clobber: f32,
     first_frame: bool,
+    egui: Egui,
 }
 
-fn model(app: &App) -> Model {
-    let _window = app.new_window().view(view).build().unwrap();
-    let mut outer = Circle::new(200.0);
-    outer.set_color_func(&Circle::white);
+fn init(app: &App) -> Model {
+    let _window = app
+        .new_window()
+        .view(view)
+        .raw_event(raw_window_event)
+        .build()
+        .unwrap();
 
-    let radius_ratio = 2.0 / 3.0;
+    let initial_roll = 0.0;
+    let initial_theta = 0.0;
 
-    let inner = Circle::new((1.0 - radius_ratio) * outer.radius);
+    let (inner, outer, wheel) = init_spiro(
+        RADIUS_RATIO,
+        PEN_OFFSET,
+        OUTER_RADIUS,
+        initial_roll,
+        initial_theta,
+    );
 
-    let wheel = Wheel::new(0.0, outer.radius - inner.radius, inner.pt_at(0.0), 1.5);
+    let egui = Egui::from_window(&app.window(_window).unwrap());
+
     Model {
         _window,
         wheel,
@@ -42,7 +58,31 @@ fn model(app: &App) -> Model {
         theta: 0.0,
         clobber: 0.003,
         first_frame: true,
+        egui,
     }
+}
+
+fn init_spiro(
+    radius_ratio: f32,
+    pen_offset: f32,
+    outer_radius: f32,
+    initial_roll: f32,
+    initial_theta: f32,
+) -> (Circle, Circle, Wheel) {
+    let outer = Circle::new(outer_radius);
+    let inner = Circle::new((1.0 - radius_ratio) * outer_radius);
+    let wheel = Wheel::new(
+        initial_roll,
+        outer.radius - inner.radius,
+        inner.pt_at(initial_theta),
+        pen_offset,
+    );
+
+    (inner, outer, wheel)
+}
+
+fn raw_window_event(_app: &App, model: &mut Model, event: &nannou::winit::event::WindowEvent) {
+    model.egui.handle_raw_event(event);
 }
 
 fn update(_app: &App, _model: &mut Model, _update: Update) {
@@ -50,19 +90,34 @@ fn update(_app: &App, _model: &mut Model, _update: Update) {
     let distance = _model.delta_theta * _model.outer.circumference() / (DEG_PERIOD as f32);
     let position = _model.inner.pt_at(_model.theta);
 
-    //println!("distance: {}\nposition: {:?}\nroll {}", distance, position, _model.wheel.roll_phase);
     _model.wheel.roll(distance, position);
 
     _model.points.append(&mut vec![_model.wheel.pen_location()]);
     if _model.first_frame == true {
         _model.first_frame = false;
     }
+
+    let egui = &mut _model.egui;
+    egui.set_elapsed_time(_update.since_start);
+    let ctx = egui.begin_frame();
+
+    // begin variables exposed via the ui
+    let clobber = &mut _model.clobber;
+    let wheel = &mut _model.wheel;
+
+    egui::Window::new("Controls").show(&ctx, |ui| {
+        ui.label("fade");
+        ui.add(egui::Slider::new(clobber, 0.0..=0.01));
+
+        ui.label("pen offset");
+        ui.add(egui::Slider::new(&mut wheel.pen_offset, -2.0..=2.0));
+    });
 }
 
-fn view(app: &App, _model: &Model, frame: Frame) {
+fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
 
-    if _model.first_frame {
+    if model.first_frame {
         // on the first frame, draw a black background
         draw.background().color(BLACK);
     } else {
@@ -71,14 +126,15 @@ fn view(app: &App, _model: &Model, frame: Frame) {
         draw.rect()
             .xy(r.xy())
             .wh(r.wh())
-            .color(rgba(0.0, 0.0, 0.0, _model.clobber));
+            .color(rgba(0.0, 0.0, 0.0, model.clobber));
     }
 
-    _model.wheel.draw(&draw);
+    model.wheel.draw(&draw);
 
-    _model.wheel.draw_guides(&draw);
+    model.wheel.draw_guides(&draw);
 
     draw.to_frame(app, &frame).unwrap();
+    model.egui.draw_to_frame(&frame).unwrap();
 }
 
 struct Circle {
@@ -195,13 +251,12 @@ impl Wheel {
 
     fn draw_guides(&self, draw: &Draw) {
         self.geometry.draw(draw);
-        let edge = self.geometry.pt_at(self.roll_phase.to_degrees());
         draw.line()
             .stroke_weight(1.0)
             .start_cap_round()
             .color(rgba(0.1, 0.6, 0.8, 0.1))
             .start(self.pen_location())
-            .end(edge);
+            .end(self.geometry.centre);
     }
 
     fn draw(&self, draw: &Draw) {
@@ -210,4 +265,14 @@ impl Wheel {
             .w_h(5.0, 5.0)
             .color(Circle::rainbow(self.roll_phase.to_degrees()));
     }
+}
+
+#[allow(dead_code)]
+struct Spiro {
+    wheel_radius: f32,
+    wheel_theta: f32,
+    theta: f32,
+    pen_offset: f32,
+    outer_radius: f32,
+    delta_theta: f32,
 }
